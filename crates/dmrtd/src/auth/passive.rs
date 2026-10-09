@@ -854,9 +854,13 @@ impl<'a> Certificate<'a> {
             // otherwise a point on some other curve would be taken for one of ours
             // purely by its length.
             let curve = Curve::from_params(params).ok_or(PassiveAuthError::UnsupportedKey)?;
-            // SEC1: compressed 02/03 ‖ x, or uncompressed 04 ‖ x ‖ y
+            // SEC1: uncompressed 04 ‖ x ‖ y, or compressed 02/03 ‖ x where the
+            // curve's verifier takes it — otherwise a key that can never verify
+            // would load, and its signatures read as bad rather than unsupported.
             let field = curve.field_len();
-            if key_bytes.len() == 1 + field || key_bytes.len() == 1 + 2 * field {
+            let uncompressed = key_bytes.len() == 1 + 2 * field;
+            let compressed = key_bytes.len() == 1 + field && curve.takes_compressed_points();
+            if uncompressed || compressed {
                 Ok(PublicKey::Ec(curve, key_bytes.to_vec()))
             } else {
                 Err(PassiveAuthError::UnsupportedKey)
@@ -1150,6 +1154,40 @@ mod tests {
             tagged(0xA0, &sha256)
         ]))
         .is_err());
+    }
+
+    /// SubjectPublicKeyInfo for an EC key on the named curve `curve_oid`.
+    fn ec_spki(curve_oid: &[u8], point: &[u8]) -> Vec<u8> {
+        let tlv = |tag: u8, body: &[u8]| {
+            let mut out = vec![tag];
+            push_len(&mut out, body.len());
+            out.extend_from_slice(body);
+            out
+        };
+        let ec_public_key = [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+        let alg = tlv(
+            der::SEQUENCE,
+            &[tlv(der::OID, &ec_public_key), tlv(der::OID, curve_oid)].concat(),
+        );
+        let key = tlv(der::BIT_STRING, &[&[0x00], point].concat());
+        [alg, key].concat()
+    }
+
+    #[test]
+    fn compressed_points_only_where_the_verifier_decompresses() {
+        let bp256 = [0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07];
+        let bp512 = [0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0d];
+        let compressed = |len: usize| [&[0x02][..], &vec![0x11; len]].concat();
+        // brainpoolP256r1 (bp256 crate): a compressed key loads
+        assert!(Certificate::parse_spki(&ec_spki(&bp256, &compressed(32))).is_ok());
+        // brainpoolP512r1 (num-bigint, uncompressed only): unsupported, not loaded
+        // to fail every signature as bad
+        assert!(matches!(
+            Certificate::parse_spki(&ec_spki(&bp512, &compressed(64))),
+            Err(PassiveAuthError::UnsupportedKey)
+        ));
+        let uncompressed = [&[0x04][..], &[0x11; 128]].concat();
+        assert!(Certificate::parse_spki(&ec_spki(&bp512, &uncompressed)).is_ok());
     }
 
     #[test]

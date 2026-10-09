@@ -217,9 +217,19 @@ fn an_ec_csca_on_another_curve_does_not_anchor_the_chain() {
 #[test]
 fn explicit_parameters_of_no_known_curve_are_refused() {
     // Change one byte of the CSCA's curve coefficient b: no longer brainpoolP256r1.
+    // b's first bytes also occur inside a (brainpoolP256r1's b reuses part of a),
+    // which comes first, so take the last occurrence: b's.
     const BP256_B: &[u8] = &[0x26, 0xDC, 0x5C, 0x6C, 0xE9, 0x4A, 0x4B, 0x44];
     let mut csca = BP256_CSCA.to_vec();
-    let at = find(&csca, BP256_B).expect("b is in the CSCA's parameters");
+    let at = csca
+        .windows(BP256_B.len())
+        .rposition(|w| w == BP256_B)
+        .expect("b is in the CSCA's parameters");
+    assert_ne!(
+        find(&csca, BP256_B),
+        Some(at),
+        "a holds b's first bytes too"
+    );
     csca[at + 7] ^= 1;
     assert_eq!(
         TrustAnchor::from_certificate(&csca).unwrap_err(),
