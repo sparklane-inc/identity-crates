@@ -146,6 +146,13 @@ impl Curve {
         (hex(self.p).bits() as usize).div_ceil(8)
     }
 
+    /// Whether a compressed SEC1 point (02/03 ‖ x) can be verified on this curve:
+    /// RustCrypto's crates decompress, the num-bigint verifier for brainpoolP512r1
+    /// doesn't.
+    pub(crate) fn takes_compressed_points(&self) -> bool {
+        !std::ptr::eq(self, &BRAINPOOL_P512R1)
+    }
+
     /// The curve an id-ecPublicKey AlgorithmIdentifier's parameters name: a
     /// namedCurve OID, or explicit ECParameters (RFC 3279 §2.3.5) equal to a known
     /// curve's. `implicitlyCA`, an unknown curve, or anything malformed: `None`.
