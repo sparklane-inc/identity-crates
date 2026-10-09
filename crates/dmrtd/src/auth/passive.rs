@@ -525,11 +525,14 @@ fn parse_pss_params(params: &[u8]) -> Result<(HashAlgo, HashAlgo, usize), Passiv
     Ok((hash, mgf_hash, salt_len))
 }
 
-/// A small non-negative DER INTEGER (salt length, trailer field).
+/// A small non-negative DER INTEGER (salt length, trailer field): minimally
+/// encoded, so a leading 0x00 only before a byte with its top bit set. Zero is
+/// allowed — a salt may be empty.
 fn small_uint(contents: &[u8]) -> Option<usize> {
     match contents {
         [] => None,
-        [b0, ..] if *b0 & 0x80 != 0 => None,
+        [b0, ..] if *b0 & 0x80 != 0 => None,       // negative
+        [0x00, b1, ..] if *b1 & 0x80 == 0 => None, // non-minimal leading zero
         bytes if bytes.len() <= 4 => Some(bytes.iter().fold(0, |n, &b| n << 8 | usize::from(b))),
         _ => None,
     }
@@ -1128,6 +1131,17 @@ mod tests {
                 Some(HashAlgo::Sha1)
             )
         );
+    }
+
+    #[test]
+    fn small_uints_are_minimal_der() {
+        assert_eq!(small_uint(&[0x00]), Some(0));
+        assert_eq!(small_uint(&[0x20]), Some(32));
+        assert_eq!(small_uint(&[0x00, 0x80]), Some(128));
+        assert_eq!(small_uint(&[0x00, 0x20]), None); // 32 with a needless 0x00
+        assert_eq!(small_uint(&[0x00, 0x00]), None);
+        assert_eq!(small_uint(&[0x80]), None); // negative
+        assert_eq!(small_uint(&[]), None);
     }
 
     #[test]
